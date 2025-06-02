@@ -1,1 +1,39 @@
+import * as SecureStore from 'expo-secure-store';
 
+export interface DerivAccount {
+  account: string;
+  token: string;
+  currency: string;
+}
+
+const TOKEN_KEY = 'deriv_auth_tokens';
+
+export async function storeAuthTokens(accounts: DerivAccount[]): Promise<boolean> {
+  try {
+    await SecureStore.setItemAsync(TOKEN_KEY, JSON.stringify(accounts));
+    return true;
+  } catch (e) {
+    console.error('Error storing tokens', e);
+    return false;
+  }
+}
+
+export async function getAuthTokens(): Promise<DerivAccount[] | null> {
+  try {
+    const data = await SecureStore.getItemAsync(TOKEN_KEY);
+    return data ? JSON.parse(data) : null;
+  } catch (e) {
+    console.error('Error retrieving tokens', e);
+    return null;
+  }
+}
+
+export async function clearAuthTokens(): Promise<boolean> {
+  try {
+    await SecureStore.deleteItemAsync(TOKEN_KEY);
+    return true;
+  } catch (e) {
+    console.error('Error clearing tokens', e);
+    return false;
+  }
+}
