@@ -1,1 +1,88 @@
+export interface Market {
+  symbol: string;
+  display_name: string;
+  market: string;
+  submarket: string;
+  category: string;
+}
 
+export interface Contract {
+  contract_id: string;
+  symbol: string;
+  contract_type: string;
+  duration: number;
+  duration_unit: string;
+  amount: number;
+  barrier?: number;
+  barrier2?: number;
+}
+
+export const MARKET_TYPES = {
+  FOREX: 'forex',
+  INDICES: 'indices',
+  COMMODITIES: 'commodities',
+  CRYPTOCURRENCIES: 'cryptocurrencies',
+  STOCKS: 'stocks',
+};
+
+export const CONTRACT_TYPES = {
+  RISE_FALL: 'rise_fall',
+  HIGHER_LOWER: 'higher_lower',
+  TOUCH_NO_TOUCH: 'touch_no_touch',
+  ASIAN: 'asian',
+  DIGIT_MATCH: 'digit_match',
+  DIGIT_DIFF: 'digit_diff',
+  DIGIT_OVER_UNDER: 'digit_over_under',
+  MULTIPLIER: 'multiplier',
+};
+
+export const DURATION_UNITS = {
+  MINUTES: 'm',
+  HOURS: 'h',
+  DAYS: 'd',
+  WEEKS: 'w',
+  MONTHS: 'M',
+};
+
+export const formatPrice = (price: number, decimals: number = 2): string => {
+  return price.toFixed(decimals);
+};
+
+export const calculatePayout = (amount: number, multiplier: number): number => {
+  return amount * multiplier;
+};
+
+export const getMarketDisplayName = (market: Market): string => {
+  return market.display_name || market.symbol;
+};
+
+export const validateContract = (contract: Contract): boolean => {
+  if (!contract.symbol || !contract.contract_type || !contract.duration || !contract.amount) {
+    return false;
+  }
+
+  if (contract.contract_type === CONTRACT_TYPES.TOUCH_NO_TOUCH && !contract.barrier) {
+    return false;
+  }
+
+  if (contract.contract_type === CONTRACT_TYPES.HIGHER_LOWER && !contract.barrier) {
+    return false;
+  }
+
+  return true;
+};
+
+export const getContractTypeDisplay = (contractType: string): string => {
+  const displayNames: { [key: string]: string } = {
+    [CONTRACT_TYPES.RISE_FALL]: 'Rise/Fall',
+    [CONTRACT_TYPES.HIGHER_LOWER]: 'Higher/Lower',
+    [CONTRACT_TYPES.TOUCH_NO_TOUCH]: 'Touch/No Touch',
+    [CONTRACT_TYPES.ASIAN]: 'Asian',
+    [CONTRACT_TYPES.DIGIT_MATCH]: 'Digit Match',
+    [CONTRACT_TYPES.DIGIT_DIFF]: 'Digit Diff',
+    [CONTRACT_TYPES.DIGIT_OVER_UNDER]: 'Digit Over/Under',
+    [CONTRACT_TYPES.MULTIPLIER]: 'Multiplier',
+  };
+
+  return displayNames[contractType] || contractType;
+};
