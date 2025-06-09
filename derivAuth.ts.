@@ -1,211 +1,39 @@
-import { WebSocket } from 'react-native-stream';
-import { getAuthTokens } from './derivAuth';
+import * as SecureStore from 'expo-secure-store';
 
-export type MessageHandler = (data: any) => void;
-export type RequestId = number;
-export type EventType = string;
-
-interface QueuedMessage {
-  message: string;
-  handler?: MessageHandler | undefined;
+export interface DerivAccount {
+  account: string;
+  token: string;
+  currency: string;
 }
 
-declare global {
-  interface WebSocket {
-    ping(): void;
-  }
-}
+const TOKEN_KEY = 'deriv_auth_tokens';
 
-class DerivWS {
-  private ws: WebSocket | null = null;
-  private appId: string = '76505'; // Hardcoded app ID as provided
-  private handlers: { [key: string]: MessageHandler } = {};
-  private globalHandler: MessageHandler | null = null;
-  private reqCounter = 1;
-  private pingInterval: ReturnType<typeof setInterval> | null = null;
-  private reconnectTimeout: ReturnType<typeof setTimeout> | null = null;
-  private token: string | null = null;
-  private messageQueue: QueuedMessage[] = [];
-  private isConnected = false;
-  private connectionPromise: Promise<void> | null = null;
-  private reconnectAttempts = 0;
-  private readonly MAX_RECONNECT_ATTEMPTS = 5;
-  private readonly RECONNECT_DELAY = 2000;
-
-  constructor() {
-    this.connect();
-  }
-
-  private async waitForConnection(): Promise<void> {
-    if (this.isConnected) return;
-    if (!this.connectionPromise) {
-      this.connectionPromise = new Promise((resolve, reject) => {
-        const timeout = setTimeout(() => reject(new Error('WebSocket connection timeout')), 10000);
-        const checkConnection = () => {
-          if (this.isConnected) {
-            clearTimeout(timeout);
-            resolve();
-          } else {
-            setTimeout(checkConnection, 100);
-          }
-        };
-        checkConnection();
-      });
-    }
-    return this.connectionPromise;
-  }
-
-  private handleConnectionError(error: Event) {
-    console.error('WebSocket error:', {
-      type: error.type,
-      message: error.message || 'No message',
-      url: this.ws?.url,
-      readyState: this.ws?.readyState,
-      errorDetails: (error as any)?.error?.message || 'No additional details',
-    });
-    this.isConnected = false;
-    this.connectionPromise = null;
-    this.ws?.close();
-  }
-
-  connect() {
-    if (this.ws?.readyState === WebSocket.OPEN) return;
-
-    try {
-      this.ws = new WebSocket(`wss://ws.deriv.com/websockets/v3?app_id=${this.appId}`) as WebSocket;
-      this.isConnected = false;
-      this.connectionPromise = null;
-
-      if (this.ws) {
-        this.ws.onopen = async () => {
-          this.isConnected = true;
-          this.reconnectAttempts = 0;
-          this.startPing();
-          const accounts = await getAuthTokens();
-          this.token = accounts && accounts.length > 0 ? accounts[0].token : null;
-          if (this.token) this.authorize(this.token);
-          this.processMessageQueue();
-        };
-
-        this.ws.onmessage = (event) => {
-          try {
-            const data = JSON.parse(event.data);
-            if (data.req_id && this.handlers[data.req_id]) {
-              const handler = this.handlers[data.req_id];
-              if (handler) {
-                handler(data);
-                delete this.handlers[data.req_id];
-              }
-            } else if (this.globalHandler) {
-              this.globalHandler(data);
-            }
-          } catch (error) {
-            console.error('Error processing message:', error);
-          }
-        };
-
-        this.ws.onclose = () => {
-          this.isConnected = false;
-          this.stopPing();
-          this.connectionPromise = null;
-          if (this.reconnectAttempts < this.MAX_RECONNECT_ATTEMPTS) {
-            this.reconnectAttempts++;
-            this.reconnectTimeout = setTimeout(
-              () => this.connect(),
-              Math.min(this.RECONNECT_DELAY * this.reconnectAttempts, 10000)
-            );
-          } else {
-            console.error('Max reconnection attempts reached');
-          }
-        };
-
-        this.ws.onerror = this.handleConnectionError.bind(this);
-      }
-    } catch (error) {
-      console.error('Error creating WebSocket connection:', error);
-      this.handleConnectionError(error as Event);
-    }
-  }
-
-  close() {
-    this.stopPing();
-    if (this.reconnectTimeout) {
-      clearTimeout(this.reconnectTimeout);
-      this.reconnectTimeout = null;
-    }
-    this.ws?.close();
-    this.isConnected = false;
-    this.connectionPromise = null;
-    this.messageQueue = [];
-    this.handlers = {};
-    this.globalHandler = null;
-  }
-
-  private processMessageQueue() {
-    while (this.messageQueue.length > 0 && this.isConnected) {
-      const { message, handler } = this.messageQueue.shift()!;
-      try {
-        this.ws?.send(message);
-        if (handler) {
-          const data = JSON.parse(message);
-          if (data.req_id) this.handlers[data.req_id] = handler;
-        }
-      } catch (error) {
-        console.error('Error processing queued message:', error);
-      }
-    }
-  }
-
-  async send(request: object, handler?: MessageHandler): Promise<RequestId> {
-    const req_id = this.reqCounter++;
-    const msg = { ...request, req_id };
-    const messageStr = JSON.stringify(msg);
-
-    try {
-      await this.waitForConnection();
-      this.ws?.send(messageStr);
-      if (handler) this.handlers[req_id] = handler;
-    } catch (error) {
-      console.warn('WebSocket not ready, queueing message:', error);
-      this.messageQueue.push({ message: messageStr, handler });
-    }
-
-    return req_id;
-  }
-
-  async subscribe(request: object, handler: MessageHandler): Promise<RequestId> {
-    return this.send({ ...request, subscribe: 1 }, handler);
-  }
-
-  setGlobalHandler(handler: MessageHandler) {
-    this.globalHandler = handler;
-  }
-
-  async authorize(token: string) {
-    this.token = token;
-    await this.send({ authorize: token });
-  }
-
-  startPing() {
-    this.pingInterval = setInterval(() => {
-      this.send({ ping: 1 });
-    }, 60000);
-  }
-
-  stopPing() {
-    if (this.pingInterval) {
-      clearInterval(this.pingInterval);
-      this.pingInterval = null;
-    }
-  }
-
-  on(type: EventType, handler: MessageHandler) {
-    this.handlers[type] = handler;
-  }
-
-  off(type: EventType) {
-    delete this.handlers[type];
+export async function storeAuthTokens(accounts: DerivAccount[]): Promise<boolean> {
+  try {
+    await SecureStore.setItemAsync(TOKEN_KEY, JSON.stringify(accounts));
+    return true;
+  } catch (e) {
+    console.error('Error storing tokens', e);
+    return false;
   }
 }
 
-export default DerivWS;
+export async function getAuthTokens(): Promise<DerivAccount[] | null> {
+  try {
+    const data = await SecureStore.getItemAsync(TOKEN_KEY);
+    return data ? JSON.parse(data) : null;
+  } catch (e) {
+    console.error('Error retrieving tokens', e);
+    return null;
+  }
+}
+
+export async function clearAuthTokens(): Promise<boolean> {
+  try {
+    await SecureStore.deleteItemAsync(TOKEN_KEY);
+    return true;
+  } catch (e) {
+    console.error('Error clearing tokens', e);
+    return false;
+  }
+} 
