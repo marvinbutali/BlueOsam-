@@ -1,3 +1,6 @@
+import { WebSocket } from 'react-native-stream';
+import { getAuthTokens } from './derivAuth';
+
 export type MessageHandler = (data: any) => void;
 export type RequestId = number;
 export type EventType = string;
@@ -7,7 +10,6 @@ interface QueuedMessage {
   handler?: MessageHandler | undefined;
 }
 
-// Use the correct WebSocket type from the browser
 declare global {
   interface WebSocket {
     ping(): void;
@@ -16,7 +18,7 @@ declare global {
 
 class DerivWS {
   private ws: WebSocket | null = null;
-  private appId: string;
+  private appId: string = '76505'; // Hardcoded app ID as provided
   private handlers: { [key: string]: MessageHandler } = {};
   private globalHandler: MessageHandler | null = null;
   private reqCounter = 1;
@@ -30,8 +32,7 @@ class DerivWS {
   private readonly MAX_RECONNECT_ATTEMPTS = 5;
   private readonly RECONNECT_DELAY = 2000;
 
-  constructor(appId: string) {
-    this.appId = appId;
+  constructor() {
     this.connect();
   }
 
@@ -39,10 +40,7 @@ class DerivWS {
     if (this.isConnected) return;
     if (!this.connectionPromise) {
       this.connectionPromise = new Promise((resolve, reject) => {
-        const timeout = setTimeout(() => {
-          reject(new Error('WebSocket connection timeout'));
-        }, 10000);
-
+        const timeout = setTimeout(() => reject(new Error('WebSocket connection timeout')), 10000);
         const checkConnection = () => {
           if (this.isConnected) {
             clearTimeout(timeout);
@@ -58,45 +56,34 @@ class DerivWS {
   }
 
   private handleConnectionError(error: Event) {
-    console.error('WebSocket error:', error);
+    console.error('WebSocket error:', {
+      type: error.type,
+      message: error.message || 'No message',
+      url: this.ws?.url,
+      readyState: this.ws?.readyState,
+      errorDetails: (error as any)?.error?.message || 'No additional details',
+    });
     this.isConnected = false;
     this.connectionPromise = null;
     this.ws?.close();
-  }
-
-  private processMessageQueue() {
-    while (this.messageQueue.length > 0 && this.isConnected) {
-      const { message, handler } = this.messageQueue.shift()!;
-      try {
-        this.ws?.send(message);
-        if (handler) {
-          const data = JSON.parse(message);
-          if (data.req_id) {
-            this.handlers[data.req_id] = handler;
-          }
-        }
-      } catch (error) {
-        console.error('Error processing queued message:', error);
-      }
-    }
   }
 
   connect() {
     if (this.ws?.readyState === WebSocket.OPEN) return;
 
     try {
-      this.ws = new WebSocket(`wss://ws.derivws.com/websockets/v3?app_id=${this.appId}`) as WebSocket;
+      this.ws = new WebSocket(`wss://ws.deriv.com/websockets/v3?app_id=${this.appId}`) as WebSocket;
       this.isConnected = false;
       this.connectionPromise = null;
 
       if (this.ws) {
-        this.ws.onopen = () => {
+        this.ws.onopen = async () => {
           this.isConnected = true;
           this.reconnectAttempts = 0;
           this.startPing();
-          if (this.token) {
-            this.authorize(this.token);
-          }
+          const accounts = await getAuthTokens();
+          this.token = accounts && accounts.length > 0 ? accounts[0].token : null;
+          if (this.token) this.authorize(this.token);
           this.processMessageQueue();
         };
 
@@ -107,7 +94,6 @@ class DerivWS {
               const handler = this.handlers[data.req_id];
               if (handler) {
                 handler(data);
-                // Clean up one-time handlers
                 delete this.handlers[data.req_id];
               }
             } else if (this.globalHandler) {
@@ -122,12 +108,11 @@ class DerivWS {
           this.isConnected = false;
           this.stopPing();
           this.connectionPromise = null;
-          
           if (this.reconnectAttempts < this.MAX_RECONNECT_ATTEMPTS) {
             this.reconnectAttempts++;
             this.reconnectTimeout = setTimeout(
               () => this.connect(),
-              this.RECONNECT_DELAY * this.reconnectAttempts
+              Math.min(this.RECONNECT_DELAY * this.reconnectAttempts, 10000)
             );
           } else {
             console.error('Max reconnection attempts reached');
@@ -142,17 +127,44 @@ class DerivWS {
     }
   }
 
+  close() {
+    this.stopPing();
+    if (this.reconnectTimeout) {
+      clearTimeout(this.reconnectTimeout);
+      this.reconnectTimeout = null;
+    }
+    this.ws?.close();
+    this.isConnected = false;
+    this.connectionPromise = null;
+    this.messageQueue = [];
+    this.handlers = {};
+    this.globalHandler = null;
+  }
+
+  private processMessageQueue() {
+    while (this.messageQueue.length > 0 && this.isConnected) {
+      const { message, handler } = this.messageQueue.shift()!;
+      try {
+        this.ws?.send(message);
+        if (handler) {
+          const data = JSON.parse(message);
+          if (data.req_id) this.handlers[data.req_id] = handler;
+        }
+      } catch (error) {
+        console.error('Error processing queued message:', error);
+      }
+    }
+  }
+
   async send(request: object, handler?: MessageHandler): Promise<RequestId> {
     const req_id = this.reqCounter++;
     const msg = { ...request, req_id };
     const messageStr = JSON.stringify(msg);
-    
+
     try {
       await this.waitForConnection();
       this.ws?.send(messageStr);
-      if (handler) {
-        this.handlers[req_id] = handler;
-      }
+      if (handler) this.handlers[req_id] = handler;
     } catch (error) {
       console.warn('WebSocket not ready, queueing message:', error);
       this.messageQueue.push({ message: messageStr, handler });
@@ -177,7 +189,7 @@ class DerivWS {
   startPing() {
     this.pingInterval = setInterval(() => {
       this.send({ ping: 1 });
-    }, 60000); // Ping every 60 seconds
+    }, 60000);
   }
 
   stopPing() {
@@ -185,20 +197,6 @@ class DerivWS {
       clearInterval(this.pingInterval);
       this.pingInterval = null;
     }
-  }
-
-  close() {
-    this.stopPing();
-    if (this.reconnectTimeout) {
-      clearTimeout(this.reconnectTimeout);
-      this.reconnectTimeout = null;
-    }
-    this.ws?.close();
-    this.isConnected = false;
-    this.connectionPromise = null;
-    this.messageQueue = [];
-    this.handlers = {};
-    this.globalHandler = null;
   }
 
   on(type: EventType, handler: MessageHandler) {
@@ -210,4 +208,4 @@ class DerivWS {
   }
 }
 
-export default DerivWS; 
+export default DerivWS;
