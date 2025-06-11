@@ -24,3 +24,10 @@
   },
   "private": true
 }
+"scripts": {
+  "start": "APP_ENV=development expo start",
+  "start:prod": "APP_ENV=production expo start",
+  "web": "APP_ENV=development expo start --web",
+  "web:prod": "APP_ENV=production expo start --web",
+  "build:web": "APP_ENV=production expo export:web"
+}
