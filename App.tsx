@@ -5,15 +5,15 @@ import { storeAuthTokens } from './utils/derivAuth';
 
 export default function App() {
   useEffect(() => {
-    const appId = 'YOUR_APP_ID';
+    const appId = '76505';
     const ws = new DerivWS(appId);
     ws.setGlobalHandler((data) => console.log('Global message:', data));
-    storeAuthTokens([{ account: 'demo', token: 'YOUR_TOKEN', currency: 'USD' }]);
+    storeAuthTokens([{ account: 'demo', token: '10000', currency: 'USD' }]);
   }, []);
 
   return (
     <View style={{ flex: 1, justifyContent: 'center', alignItems: 'center' }}>
-      <Text>Deriv WS Test App</Text>
+      <Text>Deriv WS</Text>
     </View>
   );
     }
